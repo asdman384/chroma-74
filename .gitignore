@@ -3,4 +3,5 @@
 .vscode/c_cpp_properties.json
 .vscode/ipch
 .vscode/launch.json
+src/config.h
 lib
