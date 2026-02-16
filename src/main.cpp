@@ -8,14 +8,12 @@
 #include <HTTPClient.h>
 #include <images.h>
 
-#include <Fonts/FreeSans9pt7b.h>
-#include <Fonts/FreeSans24pt7b.h>
-#include <Fonts/FreeSans18pt7b.h>
-#include <Fonts/FreeSans12pt7b.h>
-#include <Fonts/FreeSans9pt7b.h>
-#include <Fonts/FreeSansBold24pt7b.h>
-#include <Fonts/FreeSansBold18pt7b.h>
-#include <Fonts/FreeSansBold12pt7b.h>
+#include <JetBrainsMono_Regular18pt7b.h>
+#include <JetBrainsMono_Bold30pt7b.h>
+#include <JetBrainsMono_Regular8pt7b.h>
+#include <JetBrainsMonoNL_Regular7pt7b.h>
+#include <JetBrainsMono_Bold18pt7b.h>
+
 static const uint8_t EPD_BUSY = D6; // to EPD BUSY
 static const uint8_t EPD_RST = D5;  // to EPD RST
 static const uint8_t EPD_DC = D4;   // to EPD DC
@@ -59,40 +57,45 @@ void stop_wifi()
   WiFi.mode(WIFI_OFF);
 }
 
-void draw_image(String condition, bool isDaytime)
+void draw_image_weather_condition(String condition, bool isDaytime)
 {
   if (condition == "CLEAR" || condition == "MOSTLY_CLEAR" || condition == "PARTLY_CLOUDY")
   {
-    display.drawInvertedBitmap(10, 60, isDaytime ? clear : clear_n, 50, 50, GxEPD_BLACK);
-    // display.drawRGBBitmap(10, 60, isDaytime ? (uint16_t *)clear : (uint16_t *)clear_n, 50, 50);
+    display.drawInvertedBitmap(10, 60, isDaytime ? clear : clear_n, 128, 128, GxEPD_BLACK);
   }
   else if (condition == "MOSTLY_CLOUDY")
   {
-    display.drawInvertedBitmap(10, 60, isDaytime ? mostly_cloudy : mostly_cloudy_n, 50, 50, GxEPD_BLACK);
+    display.drawInvertedBitmap(10, 60, isDaytime ? mostly_cloudy : mostly_cloudy_n, 128, 128, GxEPD_BLACK);
   }
   else if (condition == "CLOUDY")
   {
-    display.drawInvertedBitmap(10, 60, cloudy, 50, 50, GxEPD_BLACK);
+    display.drawInvertedBitmap(10, 60, cloudy, 128, 128, GxEPD_BLACK);
   }
   else if (
       condition == "LIGHT_RAIN_SHOWERS" ||
-      condition == "LIGHT_SNOW_SHOWERS" || // TODO: add LIGHT_SNOW_SHOWERS image
       condition == "CHANCE_OF_SHOWERS" ||
       condition == "SCATTERED_SHOWERS" ||
-      condition == "LIGHT_SNOW" || // TODO: add LIGHT_SNOW image
       condition == "LIGHT_RAIN")
   {
-    display.drawInvertedBitmap(10, 60, light_rain_showers, 50, 50, GxEPD_BLACK);
+    display.drawInvertedBitmap(10, 60, light_rain_showers, 128, 128, GxEPD_BLACK);
   }
   else if (
       condition == "LIGHT_TO_MODERATE_RAIN" ||
       condition == "RAIN" ||
-      condition == "SNOW" ||          // TODO: add SNOW image
-      condition == "RAIN_AND_SNOW" || // TODO: add RAIN_AND_SNOW image
+
       condition == "MODERATE_TO_HEAVY_RAIN" ||
       condition == "RAIN_PERIODICALLY_HEAVY")
   {
     display.drawInvertedBitmap(10, 60, moderate_rain, 50, 50, GxEPD_BLACK);
+  }
+  else if (
+      condition == "RAIN_AND_SNOW" || // TODO: add RAIN_AND_SNOW image
+      condition == "SNOW" ||
+      condition == "LIGHT_SNOW_SHOWERS" || // TODO: add LIGHT_SNOW_SHOWERS image
+      condition == "LIGHT_SNOW"            // TODO: add LIGHT_SNOW image
+  )
+  {
+    display.drawInvertedBitmap(10, 60, cloud_snow, 128, 128, GxEPD_BLACK);
   }
   else if (
 
@@ -114,85 +117,20 @@ void draw_image(String condition, bool isDaytime)
   else
   {
     display.setCursor(10, 60);
-    display.setFont(&FreeSans9pt7b);
+    display.setFont(&JetBrainsMono_Regular8pt7b);
     display.print(condition);
   }
 }
 
-// Рисует прямоугольник 150x100 с закругленными краями 20px и псевдосерой заливкой
-// value: 0 (чёрный, всё залито), 100 (белый, ничего не залито), 50 (шахматка)
-void draw_gray_rect(int x, int y, uint8_t value)
+void render_pollutant(int x, int y, JsonArray pollutants, int index)
 {
-  const int w = 150;
-  const int h = 100;
-  const int r = 20; // радиус скругления
-  // Нарисовать прямоугольник с закруглёнными краями
-  display.fillRoundRect(x, y, w, h, r, GxEPD_WHITE);
-  display.drawRoundRect(x, y, w, h, r, GxEPD_BLACK);
-
-  // Dither Bayer 4x4
-  const uint8_t bayer4x4[4][4] = {
-      {0, 8, 2, 10},
-      {12, 4, 14, 6},
-      {3, 11, 1, 9},
-      {15, 7, 13, 5}};
-
-  // value: 0 (чёрный, всё залито), 100 (белый, ничего не залито)
-  // Нелинейная зависимость: при 50 — 25% заливки, при 0 — 100%, при 100 — 0%
-  // Используем квадратичную зависимость: fill = (1 - value/100)^2
-  float v = value / 100.0f;
-  float fill = (1.0f - v) * (1.0f - v);               // fill: 1.0 — всё чёрное, 0 — всё белое
-  uint8_t threshold = (uint8_t)(fill * 16.0f + 0.5f); // округление
-
-  for (int py = 0; py < h; ++py)
-  {
-    for (int px = 0; px < w; ++px)
-    {
-      // Проверка: внутри ли скруглённого прямоугольника
-      bool in_corner = false;
-      int dx = 0, dy = 0;
-      if (px < r && py < r)
-      {
-        in_corner = true;
-        dx = r - px - 1;
-        dy = r - py - 1;
-      }
-      if (px >= w - r && py < r)
-      {
-        in_corner = true;
-        dx = px - (w - r);
-        dy = r - py - 1;
-      }
-      if (px < r && py >= h - r)
-      {
-        in_corner = true;
-        dx = r - px - 1;
-        dy = py - (h - r);
-      }
-      if (px >= w - r && py >= h - r)
-      {
-        in_corner = true;
-        dx = px - (w - r);
-        dy = py - (h - r);
-      }
-      if (in_corner && (dx * dx + dy * dy > r * r))
-        continue;
-
-      // Байер: если значение в матрице >= threshold — белый, иначе — чёрный
-      if (bayer4x4[py % 4][px % 4] >= threshold)
-        continue;
-      display.drawPixel(x + px, y + py, GxEPD_BLACK);
-    }
-  }
-}
-
-void render_pollutant(int y, JsonArray pollutants, int index)
-{
-  display.setCursor(20, y);
-  display.print(pollutants[index]["displayName"].as<String>() + ":");
-  display.setCursor(100, y);
-  display.print(pollutants[index]["concentration"]["value"].as<int>());
-  display.setCursor(150, y);
+  String name = pollutants[index]["displayName"].as<String>();
+  display.setCursor(x, y);
+  display.print(name + ":");
+  display.setCursor(x + 60, y);
+  int value = pollutants[index]["concentration"]["value"].as<int>();
+  display.print(value);
+  display.setCursor(x + 105, y);
 
   String units = pollutants[index]["concentration"]["units"].as<String>();
   display.print(
@@ -201,6 +139,88 @@ void render_pollutant(int y, JsonArray pollutants, int index)
       : units == "PARTS_PER_MILLION"          ? "ppm"
       : units == "MILLIGRAMS_PER_CUBIC_METER" ? "mg/m3"
                                               : units);
+
+  display.setCursor(x + 150, y);
+  String interpretation = "-";
+  if (name == "SO2")
+  {
+    if (value < 20)
+      interpretation = "Good";
+    else if (value < 80)
+      interpretation = "Fair";
+    else if (value < 250)
+      interpretation = "Moderate";
+    else if (value < 350)
+      interpretation = "Poor";
+    else
+      interpretation = "Very Poor";
+  }
+  else if (name == "NO2")
+  {
+    if (value < 40)
+      interpretation = "Good";
+    else if (value < 70)
+      interpretation = "Fair";
+    else if (value < 150)
+      interpretation = "Moderate";
+    else if (value < 200)
+      interpretation = "Poor";
+    else
+      interpretation = "Very Poor";
+  }
+  else if (name == "PM10")
+  {
+    if (value < 20)
+      interpretation = "Good";
+    else if (value < 50)
+      interpretation = "Fair";
+    else if (value < 100)
+      interpretation = "Moderate";
+    else if (value < 200)
+      interpretation = "Poor";
+    else
+      interpretation = "Very Poor";
+  }
+  else if (name == "PM2.5")
+  {
+    if (value < 10)
+      interpretation = "Good";
+    else if (value < 25)
+      interpretation = "Fair";
+    else if (value < 50)
+      interpretation = "Moderate";
+    else if (value < 75)
+      interpretation = "Poor";
+    else
+      interpretation = "Very Poor";
+  }
+  else if (name == "O3")
+  {
+    if (value < 60)
+      interpretation = "Good";
+    else if (value < 100)
+      interpretation = "Fair";
+    else if (value < 140)
+      interpretation = "Moderate";
+    else if (value < 180)
+      interpretation = "Poor";
+    else
+      interpretation = "Very Poor";
+  }
+  else if (name == "CO")
+  {
+    if (value < 4400)
+      interpretation = "Good";
+    else if (value < 9400)
+      interpretation = "Fair";
+    else if (value < 12400)
+      interpretation = "Moderate";
+    else if (value < 15400)
+      interpretation = "Poor";
+    else
+      interpretation = "Very Poor";
+  }
+  display.print(" [" + interpretation + "]");
 }
 
 void configure_wakeup_timer(struct tm *local_time)
@@ -224,131 +244,112 @@ void setup()
   Serial.println("Boot number: " + String(++bootCount));
   print_wakeup_reason();
 
-  if (start_wifi() == WL_CONNECTED)
+  if (start_wifi() != WL_CONNECTED)
   {
-
-    JsonDocument aqi_doc;     // https://developers.google.com/maps/documentation/air-quality/current-conditions
-    JsonDocument weather_doc; // https://developers.google.com/maps/documentation/weather/current-conditions
-    init_display();
-    Serial.println("init_display");
-    if (!(fetch_data(aqi_doc, AQI_URL, AQI_REQUEST) && fetch_data(weather_doc, WEATHER_URL, nullptr)))
-    {
-      stop_wifi();
-
-      Serial.println(aqi_doc["error"].as<String>() + "\n" + weather_doc["error"].as<String>());
-      print_error((aqi_doc["error"].as<String>() + "\n" + weather_doc["error"].as<String>()).c_str());
-    }
-    else
-    {
-      Serial.println("start render");
-      stop_wifi();
-      float batteryVoltage = get_battery_voltage();
-
-      char time[15]; // Format: "Apr 30   HH:MM" (12 chars + null terminator)
-      struct tm *local_time = parse_iso_datetime(weather_doc["currentTime"].as<String>().c_str());
-      strftime(time, sizeof(time), "%b %d   %H:%M", local_time);
-
-      configure_wakeup_timer(local_time);
-
-      display.setTextColor(GxEPD_BLACK);
-
-      // Draw a 10x10 px grid as background
-      // draw_grid(10, GxEPD_BLACK);
-
-      // TIME and Battery
-      display.setFont(&FreeSans18pt7b);
-      display.setCursor(10, 40);
-      Serial.println((String(time)).c_str());
-      display.print((String(time)).c_str());
-      display.setCursor(350, 40);
-      display.print(("V: " + String(batteryVoltage, 2)).c_str());
-
-      String condition = weather_doc["weatherCondition"]["type"].as<String>();
-      boolean isDaytime = weather_doc["isDaytime"].as<boolean>();
-      draw_image(condition, isDaytime);
-
-      // FreeSansBold24pt7b
-      // temperature
-      int temp = ceil(weather_doc["temperature"]["degrees"].as<float>());
-      display.setFont(&FreeSansBold24pt7b);
-      display.setCursor(160, 100);
-      display.print((temp > 0 ? "+" : "") + String(temp));
-
-      // FreeSans18pt7b
-      // feels Like Temperature
-      display.setFont(&FreeSans18pt7b);
-      display.setCursor(160, 150);
-      float feel = weather_doc["feelsLikeTemperature"]["degrees"].as<float>();
-      display.print(String(feel > 0 ? "+" : "") + String(feel, 1));
-
-      // FreeSans12pt7b
-      // humidity
-      display.setFont(&FreeSans12pt7b);
-      display.drawInvertedBitmap(350, 60, humidity, 20, 20, GxEPD_BLACK);
-      display.setCursor(375, 78);
-      display.print(weather_doc["relativeHumidity"].as<int>());
-      display.setCursor(415, 78);
-      display.print("%");
-
-      // cloud cover
-      display.drawInvertedBitmap(350, 88, cloud_cover, 20, 20, GxEPD_BLACK);
-      display.setCursor(375, 105);
-      display.print(weather_doc["cloudCover"].as<int>());
-      display.setCursor(415, 105);
-      display.print("%");
-
-      // wind
-      display.drawInvertedBitmap(350, 113, wind, 20, 20, GxEPD_BLACK);
-      display.setCursor(375, 130);
-      display.print(weather_doc["wind"]["speed"]["value"].as<int>());
-      display.setCursor(415, 130);
-      display.print("km/h");
-
-      // probability of precipitation
-      int percent = weather_doc["precipitation"]["probability"]["percent"].as<int>();
-      String type = weather_doc["precipitation"]["probability"]["type"].as<String>();
-      // if (type == "RAIN")
-      // {
-      display.drawInvertedBitmap(350, 138, probability_rain, 20, 20, GxEPD_BLACK);
-      // }
-      display.setCursor(375, 155);
-      display.print(percent);
-      display.setCursor(415, 155);
-      display.print("%");
-
-      // FreeSans18pt7b
-      // air quality index
-      display.setFont(&FreeSans18pt7b);
-      display.setCursor(10, 200);
-      display.print("Air Quality: ");
-      // FreeSansBold18pt7b
-      display.setFont(&FreeSansBold18pt7b);
-      String aqiDisplay = aqi_doc["indexes"][0]["aqiDisplay"].as<String>();
-      display.print(aqiDisplay + " - ");
-      String category = aqi_doc["indexes"][0]["category"].as<String>().substring(0, aqi_doc["indexes"][0]["category"].as<String>().indexOf(" air quality"));
-      display.print(category);
-
-      // pollutants
-      display.setFont(&FreeSans9pt7b);
-      int y = 210;
-      render_pollutant(y += 20, aqi_doc["pollutants"], 3);
-      render_pollutant(y += 20, aqi_doc["pollutants"], 4);
-      render_pollutant(y += 20, aqi_doc["pollutants"], 2);
-      render_pollutant(y += 20, aqi_doc["pollutants"], 0);
-      render_pollutant(y += 20, aqi_doc["pollutants"], 5);
-      render_pollutant(y += 20, aqi_doc["pollutants"], 1);
-
-      draw_gray_rect(240, 230, aqiDisplay.toInt());
-    }
+    display.drawInvertedBitmap(0, 0, offline, 122, 122, GxEPD_BLACK);
+    Serial.println("Failed to connect to WiFi.");
+    display.display(true);
+    return begin_sleep();
   }
-  else
+
+  JsonDocument aqi_doc;     // https://developers.google.com/maps/documentation/air-quality/current-conditions
+  JsonDocument weather_doc; // https://developers.google.com/maps/documentation/weather/current-conditions
+  init_display();
+  Serial.println("init_display");
+  if (!(fetch_data(aqi_doc, AQI_URL, AQI_REQUEST) && fetch_data(weather_doc, WEATHER_URL, nullptr)))
   {
-    // display.drawInvertedBitmap(0, 0, IMAGER, display.epd2.WIDTH, display.epd2.HEIGHT, GxEPD_BLACK);
-    Serial.println("Skipping display update due to WiFi failure");
+    stop_wifi();
+    Serial.println(aqi_doc["error"].as<String>() + "\n" + weather_doc["error"].as<String>());
+    print_error((aqi_doc["error"].as<String>() + "\n" + weather_doc["error"].as<String>()).c_str());
+    display.display(true);
+    return begin_sleep();
   }
+
+  Serial.println("start render");
+  stop_wifi();
+  float batteryVoltage = get_battery_voltage();
+  char time[14]; // Format: "Apr 30  HH:MM" (N chars + null terminator)
+  struct tm *local_time = parse_iso_datetime(weather_doc["currentTime"].as<String>().c_str());
+  strftime(time, sizeof(time), "%b %d  %H:%M", local_time);
+
+  configure_wakeup_timer(local_time);
+
+  display.setTextColor(GxEPD_BLACK);
+
+  // Draw a 10x10 px grid as background
+  // draw_grid(10, GxEPD_BLACK);
+
+  // TIME and Battery
+  display.setFont(&JetBrainsMono_Regular18pt7b);
+  display.setCursor(10, 40);
+  Serial.println((String(time)).c_str());
+  display.print((String(time)).c_str());
+  display.setCursor(350, 40);
+  display.print(("V:" + String(batteryVoltage, 2)).c_str());
+
+  String condition = weather_doc["weatherCondition"]["type"].as<String>();
+  boolean isDaytime = weather_doc["isDaytime"].as<boolean>();
+  draw_image_weather_condition(condition, isDaytime);
+
+  // JetBrainsMono_Bold30pt7b
+  // temperature
+  int temp = ceil(weather_doc["temperature"]["degrees"].as<float>());
+  display.setFont(&JetBrainsMono_Bold30pt7b);
+  display.setCursor(150, 110);
+  display.print((temp > 0 ? "+" : "") + String(temp));
+
+  // JetBrainsMono_Regular18pt7b
+  // feels Like Temperature
+  display.setFont(&JetBrainsMono_Regular18pt7b);
+  display.setCursor(150, 155);
+  float feel = weather_doc["feelsLikeTemperature"]["degrees"].as<float>();
+  display.print(String(feel > 0 ? "+" : "") + String(feel, 1));
+
+  // humidity
+  int y = 75;
+  display.drawInvertedBitmap(280, y, humidity32, 32, 32, GxEPD_BLACK);
+  display.setCursor(320, y + 25);
+  display.print(weather_doc["relativeHumidity"].as<int>());
+
+  // cloud cover
+  display.drawInvertedBitmap(380, y, cloud32, 32, 32, GxEPD_BLACK);
+  display.setCursor(420, y + 25);
+  display.print(weather_doc["cloudCover"].as<int>());
+
+  // wind
+  display.drawInvertedBitmap(280, y + 45, windsock, 32, 32, GxEPD_BLACK);
+  display.setCursor(320, y + 75);
+  display.print(weather_doc["wind"]["speed"]["value"].as<int>());
+
+  // probability of precipitation
+  int precipitation = weather_doc["precipitation"]["probability"]["percent"].as<int>();
+  String type = weather_doc["precipitation"]["probability"]["type"].as<String>();
+  display.drawInvertedBitmap(380, y + 45, type == "RAIN" ? rain_prob : snow_prob, 32, 32, GxEPD_BLACK);
+  display.setCursor(420, y + 75);
+  display.print(precipitation);
+
+  // JetBrainsMono_Regular18pt7b
+  // air quality index
+  display.setFont(&JetBrainsMono_Regular18pt7b);
+  display.setCursor(10, 220);
+  display.print("Air Quality: ");
+  display.setFont(&JetBrainsMono_Bold18pt7b);
+  String aqiDisplay = aqi_doc["indexes"][0]["aqiDisplay"].as<String>();
+  display.print(aqiDisplay + "-");
+  String category = aqi_doc["indexes"][0]["category"].as<String>().substring(0, aqi_doc["indexes"][0]["category"].as<String>().indexOf(" air quality"));
+  display.print(category);
+
+  // pollutants
+  display.setFont(&JetBrainsMonoNL_Regular7pt7b);
+  y = 230;
+  render_pollutant(10, y += 20, aqi_doc["pollutants"], 3); // PM10
+  render_pollutant(250, y, aqi_doc["pollutants"], 4);      // PM2.5
+  render_pollutant(10, y += 20, aqi_doc["pollutants"], 2); // O3
+  render_pollutant(250, y, aqi_doc["pollutants"], 0);      // CO
+  render_pollutant(10, y += 20, aqi_doc["pollutants"], 5); // SO2
+  render_pollutant(250, y, aqi_doc["pollutants"], 1);      // NO2
 
   display.display(true);
-
   begin_sleep();
 }
 
@@ -510,7 +511,7 @@ void print_wakeup_reason()
 
 void print_error(const char *text)
 {
-  display.setFont(&FreeSansBold18pt7b);
+  display.setFont(&JetBrainsMono_Regular18pt7b);
   display.setTextColor(GxEPD_BLACK);
   int16_t tbx, tby;
   uint16_t tbw, tbh;
