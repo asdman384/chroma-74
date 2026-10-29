@@ -3,6 +3,7 @@
 #include "time.h"
 #include <Arduino.h>
 #include <ArduinoJSON.h> // https://arduinojson.org/v7/how-to/use-arduinojson-with-httpclient/
+#include <GxEPD2_BW.h>
 #include <GxEPD2_3C.h>
 #include <config.h>
 #include <HTTPClient.h>
@@ -22,7 +23,21 @@ static const uint8_t EPD_SCK = D2;  // to EPD CLK
 static const uint8_t EPD_MOSI = D1; // to EPD DIN (SDI)
 // static const uint8_t EPD_MISO = D10; // not used
 
+// EPD_FAST_BW 1: drive the 3-color panel in B/W mode (KW mode, LUT from OTP), ~4 s refresh instead of ~18 s.
+//                Red is not available in this mode. Set to 0 in config.h to get the 3-color driver back.
+#ifndef EPD_FAST_BW
+#define EPD_FAST_BW 1
+#endif
+// In B/W mode do a 3-color clean refresh every N boots to keep the red particles in place (0 = never)
+#ifndef EPD_COLOR_CLEAN_EVERY
+#define EPD_COLOR_CLEAN_EVERY 24
+#endif
+
+#if EPD_FAST_BW
+GxEPD2_BW<GxEPD2_750_T7, GxEPD2_750_T7::HEIGHT> display(GxEPD2_750_T7(EPD_CS, EPD_DC, EPD_RST, EPD_BUSY));
+#else
 GxEPD2_3C<GxEPD2_750c_Z08, GxEPD2_750c_Z08::HEIGHT> display(GxEPD2_750c_Z08(EPD_CS, EPD_DC, EPD_RST, EPD_BUSY));
+#endif
 
 class ErrorHandler
 {
@@ -43,6 +58,7 @@ int wifi_signal;
 RTC_DATA_ATTR int bootCount = 0;
 // #######################################################################
 void init_display();
+void show_display();
 float get_battery_voltage();
 void print_wakeup_reason();
 tm *parse_iso_datetime(const char *iso_string);
@@ -240,28 +256,33 @@ void setup()
 {
   pinMode(A0, INPUT); // ADC
   Serial.begin(115200);
-  delay(1000); // Take some time to open up the Serial Monitor
+  if (esp_sleep_get_wakeup_cause() != ESP_SLEEP_WAKEUP_TIMER)
+    delay(1000); // Take some time to open up the Serial Monitor (not needed on timer wakeup)
   Serial.println("Boot number: " + String(++bootCount));
   print_wakeup_reason();
+
+  // Default wakeup, also used when WiFi or fetch fails; may be changed by configure_wakeup_timer()
+  esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * uS_TO_S_FACTOR);
+
+  init_display();
+  Serial.println("init_display");
 
   if (start_wifi() != WL_CONNECTED)
   {
     display.drawInvertedBitmap(0, 0, offline, 122, 122, GxEPD_BLACK);
     Serial.println("Failed to connect to WiFi.");
-    display.display(true);
+    show_display();
     return begin_sleep();
   }
 
   JsonDocument aqi_doc;     // https://developers.google.com/maps/documentation/air-quality/current-conditions
   JsonDocument weather_doc; // https://developers.google.com/maps/documentation/weather/current-conditions
-  init_display();
-  Serial.println("init_display");
   if (!(fetch_data(aqi_doc, AQI_URL, AQI_REQUEST) && fetch_data(weather_doc, WEATHER_URL, nullptr)))
   {
     stop_wifi();
     Serial.println(aqi_doc["error"].as<String>() + "\n" + weather_doc["error"].as<String>());
     print_error((aqi_doc["error"].as<String>() + "\n" + weather_doc["error"].as<String>()).c_str());
-    display.display(true);
+    show_display();
     return begin_sleep();
   }
 
@@ -349,7 +370,7 @@ void setup()
   render_pollutant(10, y += 20, aqi_doc["pollutants"], 5); // SO2
   render_pollutant(250, y, aqi_doc["pollutants"], 1);      // NO2
 
-  display.display(true);
+  show_display();
   begin_sleep();
 }
 
@@ -458,13 +479,28 @@ void init_display()
   SPI.end();
   SPI.begin(EPD_SCK, /*MISO=*/-1, EPD_MOSI, /*SS=*/EPD_CS);
 
-  // Some big tri-color panels need a moment after power-on
-  delay(100);
-
   display.init(115200);
   display.fillScreen(GxEPD_WHITE);
   display.setFullWindow();
   display.setRotation(3);
+}
+
+// Full refresh from the buffer (also powers the panel off)
+void show_display()
+{
+#if EPD_FAST_BW
+  if (EPD_COLOR_CLEAN_EVERY > 0 && (bootCount - 1) % EPD_COLOR_CLEAN_EVERY == 0)
+  {
+    // B/W waveform doesn't drive the red particles, clear the screen with the 3-color waveform (~18 s)
+    Serial.println("3-color clean refresh");
+    GxEPD2_750c_Z08 epd_3c(EPD_CS, EPD_DC, EPD_RST, EPD_BUSY);
+    epd_3c.init(115200);
+    epd_3c.clearScreen();
+    epd_3c.powerOff();
+    display.init(115200); // reset the controller back to B/W mode, the buffer is kept
+  }
+#endif
+  display.display(false);
 }
 
 float get_battery_voltage()

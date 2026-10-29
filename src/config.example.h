@@ -20,3 +20,7 @@ const char PROGMEM WEATHER_URL[] = "https://weather.googleapis.com/v1/currentCon
 // Sleep configuration
 #define uS_TO_S_FACTOR 1000000ULL /* Conversion factor for micro seconds to seconds */
 #define TIME_TO_SLEEP 600         /* Time ESP32 will go to sleep (in seconds) */
+
+// Display configuration (defaults are in main.cpp)
+// #define EPD_FAST_BW 1            /* 1: B/W mode, ~4 s refresh; 0: 3-color driver, ~18 s refresh */
+// #define EPD_COLOR_CLEAN_EVERY 24 /* B/W mode: 3-color clean refresh every N boots, 0 = never */
